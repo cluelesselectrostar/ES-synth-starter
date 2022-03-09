@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
+#include <STM32FreeRTOS.h>
 
 //Constants
   const uint32_t interval = 100; //Display update interval
@@ -85,9 +86,9 @@ void setRow(uint8_t rowIdx){
   // Disable (set low) the row select enable first
   digitalWrite(REN_PIN, LOW);
 
-  bool RA0 = rowIdx & B00000001;
-  bool RA1 = (rowIdx >> 1) & B00000001;
-  bool RA2 = (rowIdx >> 2) & B00000001;
+  bool RA0 = rowIdx & B1;
+  bool RA1 = (rowIdx >> 1) & B1;
+  bool RA2 = (rowIdx >> 2) & B1;
 
   digitalWrite(RA0_PIN, RA0);
   digitalWrite(RA1_PIN, RA1);
@@ -128,7 +129,7 @@ void sampleISR() {
   int32_t Vout = phaseAcc >> 24; // Range reduced to -2^7 to 2^7. Sawtooth value proportional to phase
   analogWrite(OUTR_PIN, Vout + 128); // Audio value of 0 produces 1.65V
 
-  // Note always define function to have midpoint of zero, add DCoffset in last steps
+  // Note: always define function to have midpoint of zero, add DCoffset in last steps
 }
 
 /*
@@ -137,7 +138,21 @@ void sampleISR() {
 • Look up the phase step size for the key that is pressed and update currentStepSize
 */
 void scanKeysTask(void * pvParameters) {
+    const TickType_t xFrequency = 50/portTICK_PERIOD_MS;
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    /*
+    xFrequency will be the initiation interval of the task. It is given in units of RTOS scheduler
+    ticks and we can use the constant portTICK_PERIOD_MS to convert a time in milliseconds to
+    scheduler ticks. Here we have set the initiation interval to 50ms.
+
+    xLastWakeTime will store the time (tick count) of the last initiation. We initialise it with the
+    API call xTaskGetTickCount() to get the current time. In subsequent iterations this variable
+    will be updated by the call to vTaskDelayUntil().
+    */
+
+    while(1) { // independent thread, infinite loop
     int32_t localCurrentStepSize;
+    vTaskDelayUntil( &xLastWakeTime, xFrequency );
 
     for (int i=0; i<=2; i++) {
       setRow(i);
@@ -181,6 +196,35 @@ void scanKeysTask(void * pvParameters) {
 
     localCurrentStepSize = stepSizes[key];
     __atomic_store_n(&currentStepSize, localCurrentStepSize, __ATOMIC_RELAXED); // stores localCurrentStepSize in currentStepSize as an atomic operation.
+    }
+}
+
+void displayUpdateTask(void * pvParameters) {
+    const TickType_t xFrequency = 100/portTICK_PERIOD_MS; //100ms initiation interval
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+
+    while(1) {
+      vTaskDelayUntil( &xLastWakeTime, xFrequency );
+      //Update display
+      u8g2.clearBuffer();         // clear the internal memory
+      u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
+
+      u8g2.setCursor(2,10);
+      u8g2.drawStr(2,10,"Not a real piano");
+
+      u8g2.setCursor(2,20);
+      u8g2.print(keyArray[0],HEX);
+      u8g2.print(keyArray[1],HEX);
+      u8g2.print(keyArray[2],HEX);
+
+      u8g2.setCursor(2,30);
+      u8g2.drawStr(2,30, note.c_str());
+      //String dataString = "Row0:" + String(keyArray[0]) + ", Row1:" + String(keyArray[1]) + ", Row2:"  + String(keyArray[2]);
+      //Serial.println(dataString);
+
+      u8g2.sendBuffer();          // transfer internal memory to the display
+      digitalToggle(LED_BUILTIN); //Toggle LED
+    }
 }
 
 void setup() {
@@ -222,38 +266,30 @@ void setup() {
   //Initialise UART
   Serial.begin(9600);
   Serial.println("Hello World");
+
+  TaskHandle_t displayUpdateHandle = NULL;
+  xTaskCreate(
+    displayUpdateTask, /* Function that implements the task */
+    "displayUpdate", /* Text name for the task */
+    256, /* Stack size in words, not bytes (256 bytes)*/
+    NULL, /* Parameter passed into the task */
+    1, /* Task priority: Low */
+    &displayUpdateHandle
+  ); /* Pointer to store the task handle */
+
+  TaskHandle_t scanKeysHandle = NULL;
+  xTaskCreate(
+    scanKeysTask, /* Function that implements the task */
+    "scanKeys", /* Text name for the task */
+    64, /* Stack size in words, not bytes (256 bytes)*/
+    NULL, /* Parameter passed into the task */
+    2, /* Task priority: HIGH */
+    &scanKeysHandle
+  ); /* Pointer to store the task handle */
+
+  vTaskStartScheduler(); //start the RTOS scheduler
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
-  static uint32_t next = millis();
-  static uint32_t count = 0;
-
-  if (millis() > next) {
-    next += interval;
-
-    scanKeysTask(NULL);
-
-    //Update display
-    u8g2.clearBuffer();         // clear the internal memory
-    u8g2.setFont(u8g2_font_ncenB08_tr); // choose a suitable font
-
-    u8g2.setCursor(2,10);
-    u8g2.drawStr(2,10,"Not a real piano");
-
-    u8g2.setCursor(2,20);
-    u8g2.print(keyArray[0],HEX);
-    u8g2.print(keyArray[1],HEX);
-    u8g2.print(keyArray[2],HEX);
-
-    u8g2.setCursor(2,30);
-    u8g2.drawStr(2,30, note.c_str());
-    //String dataString = "Row0:" + String(keyArray[0]) + ", Row1:" + String(keyArray[1]) + ", Row2:"  + String(keyArray[2]);
-    //Serial.println(dataString);
-
-    u8g2.sendBuffer();          // transfer internal memory to the display
-
-    //Toggle LED
-    digitalToggle(LED_BUILTIN);
-  }
 }
