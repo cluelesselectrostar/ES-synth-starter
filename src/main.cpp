@@ -367,13 +367,14 @@ void setup() {
     &scanKeysHandle
   ); /* Pointer to store the task handle */
 
-  keyArrayMutex = xSemaphoreCreateMutex(); // Create mutex before schedule starts
-  vTaskStartScheduler(); //start the RTOS scheduler
-
   // initialise CAN module
   CAN_Init(true);
   setCANFilter(0x123,0x7ff);
   CAN_Start();
+  
+  keyArrayMutex = xSemaphoreCreateMutex(); // Create mutex before schedule starts
+  vTaskStartScheduler(); //start the RTOS scheduler
+
 }
 
 void loop() {
